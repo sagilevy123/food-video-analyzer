@@ -3,15 +3,20 @@ import time
 import json
 import google.generativeai as genai
 import googlemaps
+import os
+from dotenv import load_dotenv
 
-# --- מפתחות GOOGLE ---
-GEMINI_API_KEY = "AIzaSyC65j91SU8oITsbeTXQb9u0ZL41yrdm8tI"
-GOOGLE_MAPS_KEY = "AIzaSyBaZ1IIr6lOdmjg4JkA_UAuDDYtfEh_5vY"
+# טעינת המשתנים מהקובץ הנסתר
+load_dotenv()
 
-# --- מפתחות SUPABASE ---
-# SUPABASE_URL = "https://eerbtqfstshgndryykds.supabase.co"
-# SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVlcmJ0cWZzdHNoZ25kcnl5a2RzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY2OTY3ODUsImV4cCI6MjA4MjI3Mjc4NX0.QS4d5jRfrxPHFOroPBZ5J6dWZ9ZvYchgiuIKAkd3Rcg..."
+# משיכת המפתחות
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GOOGLE_MAPS_KEY = os.getenv("GOOGLE_MAPS_KEY")
 
+# בדיקה שהמפתחות נטענו
+if not GEMINI_API_KEY or not GOOGLE_MAPS_KEY:
+    print("❌ שגיאה: המפתחות לא נמצאו בקובץ .env")
+    exit()
 # --- אתחול השירותים ---
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
