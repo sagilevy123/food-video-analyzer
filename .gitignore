@@ -1,0 +1,8 @@
+node_modules/
+functions/node_modules/
+build/
+.dart_tool/
+ios/
+android/
+*.mp4
+.DS_Store
