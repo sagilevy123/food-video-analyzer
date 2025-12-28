@@ -192,74 +192,166 @@ void _showDetails(BuildContext context, Map<String, dynamic> data) {
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
     builder: (context) {
-      final String name = data['name'] ?? 'Restaurant';
-      final String essence = data['recommendation_essence'] ?? '';
-      final List<dynamic> tags = data['recommendation_tags'] ?? [];
-      final String videoUrl = data['videoUrl'] ?? '';
       final String websiteUrl = data['website'] ?? '';
+      final String priceLevel = data['price_level'] ?? 'not-known';
+      final String sentimentScore = data['sentiment_score'] ?? 'neutral';
 
-      return Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            if (essence.isNotEmpty) Text(essence, style: const TextStyle(fontSize: 16)),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              children: tags.map((t) => Chip(label: Text(t.toString()))).toList(),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  final loc = data['location'];
-                  final url = "https://www.google.com/maps/search/?api=1&query=${loc['lat']},${loc['lng']}";
-                  if (await canLaunchUrl(Uri.parse(url))) await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                },
-                icon: const Icon(Icons.directions),
-                label: const Text('Navigate'),
+      Color getPriceColor() {
+        switch (priceLevel) {
+          case 'cheap': return Colors.green;
+          case 'normal': return Colors.blue;
+          case 'expensive': return Colors.red;
+          default: return Colors.orange;
+        }
+      }
+
+      Color getSentimentColor() {
+        switch (sentimentScore) {
+          case 'positive': return Colors.green;
+          case 'negative': return Colors.red;
+          default: return Colors.orange;
+        }
+      }
+
+      return SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // שם המסעדה - עכשיו הוא לחיץ!
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: websiteUrl.isNotEmpty ? () => launchUrl(Uri.parse(websiteUrl)) : null,
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              data['name'] ?? 'Restaurant',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                decoration: websiteUrl.isNotEmpty ? TextDecoration.underline : null,
+                                color: websiteUrl.isNotEmpty ? Colors.blue.shade900 : Colors.black,
+                              ),
+                            ),
+                          ),
+                          if (websiteUrl.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: Icon(Icons.open_in_new, size: 16, color: Colors.blue.shade900),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // תגית מחיר
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: getPriceColor().withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: getPriceColor()),
+                    ),
+                    child: Text(
+                      priceLevel == 'not-known' ? "? Price" : priceLevel.toUpperCase(),
+                      style: TextStyle(color: getPriceColor(), fontWeight: FontWeight.bold, fontSize: 11),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            if (websiteUrl.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                final Uri uri = Uri.parse(websiteUrl);
-                if (await canLaunchUrl(uri)) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
-              },
-              icon: const Icon(Icons.language),
-              label: const Text('Visit Website'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.blue,
-                side: const BorderSide(color: Colors.blue),
-              ),
-            ),
+              const SizedBox(height: 12),
+
+              // Essence - תיאור מאוזן
+              if (data['recommendation_essence'] != null)
+                Text(
+                  data['recommendation_essence'],
+                  style: TextStyle(fontSize: 15, color: Colors.grey.shade800, height: 1.4),
+                ),
+
+              const SizedBox(height: 16),
+
+              // בלוק סנטימנט מהקהילה
+              if (data['community_sentiment'] != null && data['community_sentiment'].toString().isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.blue.shade100),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(width: 8, height: 8, decoration: BoxDecoration(color: getSentimentColor(), shape: BoxShape.circle)),
+                          const SizedBox(width: 8),
+                          const Text("Community Voice", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blueGrey)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        data['community_sentiment'],
+                        style: TextStyle(color: Colors.blue.shade900, fontSize: 13, height: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              // מנות מומלצות
+              if ((data['must_order_dishes'] as List? ?? []).isNotEmpty) ...[
+                const Text("Top Picks", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  children: (data['must_order_dishes'] as List).map((dish) => Chip(
+                    label: Text(dish.toString(), style: const TextStyle(fontSize: 11)),
+                    backgroundColor: Colors.orange.shade50,
+                    side: BorderSide(color: Colors.orange.shade100),
+                    visualDensity: VisualDensity.compact,
+                  )).toList(),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              const Divider(),
+              const SizedBox(height: 8),
+              _buildActionButton(Icons.directions, 'Get Directions', Colors.blue, () async {
+                 final loc = data['location'];
+                 final url = "https://www.google.com/maps/dir/?api=1&destination=${loc['lat']},${loc['lng']}";
+                 await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+              }),
+              _buildActionButton(Icons.play_circle_fill, 'Watch TikTok Review', Colors.black, () => launchUrl(Uri.parse(data['videoUrl'] ?? ''))),
+            ],
           ),
-        ],
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  if (videoUrl.isNotEmpty) await launchUrl(Uri.parse(videoUrl), mode: LaunchMode.externalApplication);
-                },
-                icon: const Icon(Icons.play_circle_fill),
-                label: const Text('Watch TikTok'),
-              ),
-            ),
-          ],
         ),
       );
     },
+  );
+}
+
+// פונקציית עזר לכפתורים כדי למנוע כפל קוד
+Widget _buildActionButton(IconData icon, String label, Color color, VoidCallback onTap) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(foregroundColor: color, side: BorderSide(color: color.withOpacity(0.5))),
+      ),
+    ),
   );
 }
 

@@ -70,12 +70,18 @@ export const onTikTokLinkAdded = functions.runWith({
                 parts: [
                     { text: `Analyze this video and these user comments: "${commentsText}".
                              Extract restaurant details in ENGLISH.
-                             - "name": Restaurant name.
-                             - "address": Best available address.
-                             - "cuisine": Primary food type.
-                             - "recommendation_essence": A 2-3 sentence summary. If comments mention specific "must-order" dishes, long wait times, or if the place is "overrated", include that info here.
-                             - "recommendation_tags": Array of 3-5 tags (e.g. ["Romantic", "Cheap", "Must-Try"]).
-                             - "website": The official website URL (search for it if not in video).
+
+                             STRICT RULES FOR CONTENT:
+                             - "name": Official restaurant name.
+                             - "address": Real physical address.
+                             - "cuisine": Primary food type (1-2 words).
+                             - "recommendation_essence": A rich 1-sentence description. Must include the vibe and a key feature. (Example: "A lively rooftop bar serving creative cocktails and Japanese-fusion small plates").
+                             - "community_sentiment": A detailed but brief summary of what people say. (Example: "Mixed reviews: many praise the unique flavors, but several users mention long wait times and high prices").
+                             - "sentiment_score": "positive", "neutral", or "negative".
+                             - "must_order_dishes": Array of 1-3 specific dishes.
+                             - "price_level": "expensive", "normal", "cheap", or "not-known".
+                             - "recommendation_tags": Array of 3-5 tags.
+                             - "website": Official URL.
 
                              Return ONLY valid JSON.`
                     },
@@ -93,13 +99,16 @@ export const onTikTokLinkAdded = functions.runWith({
         const geoRes = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(searchQuery)}&key=${MAPS_KEY}`);
 
         const firstResult = geoRes.data.results[0];
-        const formattedAddress = firstResult?.formatted_address || aiData.address;
+
+        // כאן קורה הקסם: אם גוגל מצא תוצאה, אנחנו לוקחים את הכתובת הרשמית שלו (Formatted Address)
+        // זה מנקה סופית הערות כמו "20 דקות מתל אביב" והופך אותן לכתובת סטנדרטית
+        const finalAddress = firstResult ? firstResult.formatted_address : aiData.address;
         const loc = firstResult?.geometry.location || { lat: 32.0853, lng: 34.7818 };
 
-        // --- שלב 5: שמירת הנתונים הסופיים ---
+        // --- שלב 5: שמירת הנתונים ---
         await admin.firestore().collection("restaurants").add({
             ...aiData,
-            address: formattedAddress,
+            address: finalAddress, // הכתובת המנוקה והרשמית
             location: { lat: loc.lat, lng: loc.lng },
             videoUrl: tiktokUrl,
             sourceCommentsUsed: commentsText !== "No comments available.",
