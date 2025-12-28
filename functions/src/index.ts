@@ -105,13 +105,16 @@ export const onTikTokLinkAdded = functions.runWith({
         const finalAddress = firstResult ? firstResult.formatted_address : aiData.address;
         const loc = firstResult?.geometry.location || { lat: 32.0853, lng: 34.7818 };
 
-        // --- שלב 5: שמירת הנתונים ---
+        // --- שלב 5: שמירת הנתונים (מעודכן עם שם המבקר) ---
+        const authorName = tikRes.data.data?.author?.nickname || "TikTok Creator";
+
         await admin.firestore().collection("restaurants").add({
             ...aiData,
-            address: finalAddress, // הכתובת המנוקה והרשמית
+            address: finalAddress,
             location: { lat: loc.lat, lng: loc.lng },
             videoUrl: tiktokUrl,
-            sourceCommentsUsed: commentsText !== "No comments available.",
+            userId: data?.userId,
+            reviewerName: authorName, // שמירת שם המבקר מטיקטוק
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
