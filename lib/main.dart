@@ -6,13 +6,21 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'google_auth_screen.dart';
 import 'package:intl/intl.dart';
+import 'package:my_food_app/models/FilterCriteria.dart';
+import 'package:my_food_app/widgets/ui_components.dart';
+import 'package:my_food_app/widgets/details_logic.dart';
+import 'package:my_food_app/services/url_service.dart';
 
+/// The entry point of the Flutter application.
+/// It ensures all bindings are initialized and Firebase is ready before launching.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   runApp(const FoodApp());
 }
 
+/// The root widget of the Foodie Map application.
+/// Sets the global visual theme and determines the initial screen based on authentication state.
 class FoodApp extends StatelessWidget {
   const FoodApp({super.key});
 
@@ -21,12 +29,14 @@ class FoodApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
+      // StreamBuilder listens to the user's authentication status in real-time.
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
+          // If the user is logged in, show the HomeScreen, otherwise show the Auth screen.
           if (snapshot.hasData) {
             return const HomeScreen();
           }
@@ -37,15 +47,10 @@ class FoodApp extends StatelessWidget {
   }
 }
 
-class FilterCriteria {
-  String? city;
-  String? cuisine;
-  String? reviewer;
-  List<String> selectedTags = [];
 
-  bool get isEmpty => city == null && cuisine == null && reviewer == null && selectedTags.isEmpty;
-}
+// --- MAIN SCREENS ---
 
+/// The central hub of the app, containing the searchable list of restaurants and filter options.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -54,7 +59,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   FilterCriteria filters = FilterCriteria();
+  String searchQuery = "";
+  final TextEditingController _searchController = TextEditingController();
 
+  /// Adds or removes a tag from the active filter list.
   void _toggleTag(String tag) {
     setState(() {
       if (filters.selectedTags.contains(tag)) {
@@ -65,272 +73,263 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _updateFilter(String type, String? value) {
-    setState(() {
-      if (type == 'city') filters.city = value;
-      if (type == 'cuisine') filters.cuisine = value;
-    });
+  /// Displays a selection dialog for predefined filtering categories (City/Cuisine).
+  void _showFilterDialog(String type, List<String> options) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text("Select ${type == 'city' ? 'City' : 'Cuisine'}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text("All"),
+              onTap: () {
+                setState(() => type == 'city' ? filters.city = null : filters.cuisine = null);
+                Navigator.pop(context);
+              },
+            ),
+            ...options.map((opt) => ListTile(
+                  title: Text(opt),
+                  onTap: () {
+                    setState(() => type == 'city' ? filters.city = opt : filters.cuisine = opt);
+                    Navigator.pop(context);
+                  },
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final List<String> availableTags = ['Cheap', 'Tasty', 'Atmosphere', 'Romantic', 'Kosher'];
-
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.white,
-        centerTitle: false, // מצמיד את הטקסט לשמאל
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
           children: [
-            const Text('Foodie Map',
-              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 20)),
-            // הצגת שם המשתמש המחובר מתחת לכותרת
-            Text(
-              "Hello, ${FirebaseAuth.instance.currentUser?.displayName ?? 'User'}",
-              style: TextStyle(color: Colors.blue[700], fontSize: 13, fontWeight: FontWeight.w500),
+            // HEADER: App branding and "Add Link" navigation
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Expanded Column handles the title and tagline without horizontal overflow.
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("Foodie Map",
+                                 style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -1)),
+                            Text("Organizing your favorites has never been so easy",
+                                 style: TextStyle(fontSize: 14, color: Colors.grey, fontWeight: FontWeight.w400)),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddLinkScreen())),
+                        icon: const Icon(Icons.add_circle, color: Colors.blue, size: 32),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  // SEARCH BAR: Triggers real-time filtering of the displayed list.
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: (val) => setState(() => searchQuery = val.toLowerCase()),
+                      decoration: const InputDecoration(
+                        hintText: "Search restaurants, notes...",
+                        border: InputBorder.none,
+                        icon: Icon(Icons.search, color: Colors.grey),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // FILTERS: Horizontal scrollable chips for city, cuisine, and tags.
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Row(
+                children: [
+                  _buildModernFilterButton(
+                    icon: Icons.location_on_outlined,
+                    label: filters.city ?? "City",
+                    onTap: () => _showFilterDialog('city', ['Tel Aviv', 'Jerusalem', 'Haifa', 'Herzliya']),
+                    isActive: filters.city != null,
+                  ),
+                  const SizedBox(width: 10),
+                  _buildModernFilterButton(
+                    icon: Icons.restaurant_outlined,
+                    label: filters.cuisine ?? "Cuisine",
+                    onTap: () => _showFilterDialog('cuisine', ['Burger', 'Pizza', 'Asian', 'Meat']),
+                    isActive: filters.cuisine != null,
+                  ),
+                  const SizedBox(width: 12),
+                  ...['Cheap', 'Tasty', 'Romantic', 'Kosher'].map((tag) {
+                    final isSelected = filters.selectedTags.contains(tag);
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: () => _toggleTag(tag),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isSelected ? Colors.black : Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: isSelected ? Colors.black : Colors.grey[200]!),
+                          ),
+                          child: Text(tag, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : Colors.black87)),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Color(0xFFF5F5F5)),
+            // LIST VIEW: Fetches user-specific restaurant data from Cloud Firestore.
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('restaurants')
+                    .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+                  var allDocs = snapshot.data!.docs;
+
+                  // Manual client-side filtering based on search query.
+                  var filteredDocs = allDocs.where((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    return searchQuery.isEmpty ||
+                           (data['name'] ?? '').toString().toLowerCase().contains(searchQuery);
+                  }).toList();
+
+                  // Prevents duplicate entries from appearing in the UI list.
+                  final seenNames = <String>{};
+                  final List<QueryDocumentSnapshot> uniqueDocs = filteredDocs.where((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    final String name = (data['name'] ?? '').toString().toLowerCase().trim();
+                    if (seenNames.contains(name)) {
+                      return false;
+                    } else {
+                      seenNames.add(name);
+                      return true;
+                    }
+                  }).toList();
+
+                  if (uniqueDocs.isEmpty) return const Center(child: Text("No restaurants found"));
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(20),
+                    itemCount: uniqueDocs.length,
+                    itemBuilder: (context, index) {
+                      final doc = uniqueDocs[index];
+                      final data = doc.data() as Map<String, dynamic>;
+                      data['docId'] = doc.id;
+
+                      // Dismissible allows users to delete an entry with a swipe.
+                      return Dismissible(
+                        key: Key(doc.id),
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (direction) {
+                          FirebaseFirestore.instance.collection('restaurants').doc(doc.id).delete();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("${data['name']} removed from your list")),
+                          );
+                        },
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Icon(Icons.delete_outline, color: Colors.white, size: 28),
+                        ),
+                        child: _buildModernCard(context, data),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ],
         ),
-        actions: [
-          // הצגת תמונת הפרופיל של המשתמש (אם קיימת)
-          if (FirebaseAuth.instance.currentUser?.photoURL != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 8.0),
-              child: CircleAvatar(
-                radius: 15,
-                backgroundImage: NetworkImage(FirebaseAuth.instance.currentUser!.photoURL!),
-              ),
-            ),
-          IconButton(
-            icon: const Icon(Icons.add_circle, color: Colors.blue, size: 28),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddLinkScreen())),
-          ),
-        ],
-      ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // שורת סינון מאוחדת וקטנה יותר
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              children: [
-                // Dropdowns קטנים יותר
-                _buildTinyDropdown('City', 'city', ['Tel Aviv', 'Jerusalem', 'Haifa']),
-                const SizedBox(width: 8),
-                _buildTinyDropdown('Cuisine', 'cuisine', ['Burger', 'Pizza', 'Asian', 'Meat']),
-                const SizedBox(width: 12),
-                const VerticalDivider(width: 1),
-                const SizedBox(width: 12),
-
-                // תגיות וסינון מבקרים באותה שורה גלילה
-                ...availableTags.map((tag) {
-                  final isSelected = filters.selectedTags.contains(tag);
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: FilterChip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text(tag, style: const TextStyle(fontSize: 12)),
-                      selected: isSelected,
-                      onSelected: (_) => _toggleTag(tag),
-                      selectedColor: Colors.blue[100],
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                  );
-                }).toList(),
-              ],
-            ),
-          ),
-
-          // סינון מבקרים קומפקטי (ללא כותרת גדולה)
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('restaurants')
-                .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) return const SizedBox();
-              final reviewers = snapshot.data!.docs
-                  .map((doc) => (doc.data() as Map<String, dynamic>)['reviewerName']?.toString())
-                  .where((name) => name != null && name != "TikTok User")
-                  .toSet().toList();
-
-              if (reviewers.isEmpty) return const SizedBox();
-
-              return Container(
-                height: 40,
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: [
-                    const Center(child: Text("By:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey))),
-                    const SizedBox(width: 8),
-                    ChoiceChip(
-                      visualDensity: VisualDensity.compact,
-                      label: const Text("All", style: TextStyle(fontSize: 12)),
-                      selected: filters.reviewer == null,
-                      onSelected: (_) => setState(() => filters.reviewer = null),
-                    ),
-                    ...reviewers.map((name) => Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: ChoiceChip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(name!, style: const TextStyle(fontSize: 12)),
-                        selected: filters.reviewer == name,
-                        onSelected: (selected) => setState(() => filters.reviewer = selected ? name : null),
-                        selectedColor: Colors.orange[100],
-                      ),
-                    )),
-                  ],
-                ),
-              );
-            },
-          ),
-          const Divider(height: 1),
-
-          // 4. רשימת המסעדות
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('restaurants')
-                  .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-                var docs = snapshot.data!.docs.where((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-
-                  bool matchCity = filters.city == null || (data['address'] ?? '').toString().toLowerCase().contains(filters.city!.toLowerCase());
-                  bool matchCuisine = filters.cuisine == null || (data['cuisine'] ?? '') == filters.cuisine;
-                  bool matchReviewer = filters.reviewer == null || data['reviewerName'] == filters.reviewer;
-
-                  List resTags = (data['recommendation_tags'] as List? ?? []).map((t) => t.toString().toLowerCase()).toList();
-                  bool matchTags = filters.selectedTags.every((tag) => resTags.contains(tag.toLowerCase()));
-
-                  return matchCity && matchCuisine && matchTags && matchReviewer;
-                }).toList();
-
-                if (docs.isEmpty) return _buildEmptyState();
-
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    return _buildModernCard(context, data);
-                  },
-                );
-              },
-            ),
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MapScreen(filteredFilters: filters))),
-        label: const Text('Map View', style: TextStyle(fontWeight: FontWeight.bold)),
-        icon: const Icon(Icons.map_outlined),
+        label: const Text("Map"),
+        icon: const Icon(Icons.map),
         backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
       ),
     );
   }
 
-  Widget _buildModernCard(BuildContext context, Map<String, dynamic> data) {
-    String formattedDate = "";
-    if (data['createdAt'] != null) {
-      DateTime dt = (data['createdAt'] as Timestamp).toDate();
-      formattedDate = DateFormat('dd/MM/yyyy').format(dt);
-    }
+  /// Builder for specialized filter category buttons.
+  Widget _buildModernFilterButton({required IconData icon, required String label, required VoidCallback onTap, required bool isActive}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue[50] : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: isActive ? Colors.blue[200]! : Colors.grey[200]!),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: isActive ? Colors.blue[700] : Colors.grey[600]),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: isActive ? Colors.blue[700] : Colors.black87)),
+            const SizedBox(width: 4),
+            Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.grey[400]),
+          ],
+        ),
+      ),
+    );
+  }
 
+  /// Builder for individual restaurant summary cards.
+  Widget _buildModernCard(BuildContext context, Map<String, dynamic> data) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4))],
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(child: Text(data['name'] ?? 'Restaurant', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18))),
-            if (formattedDate.isNotEmpty)
-              Text(formattedDate, style: TextStyle(fontSize: 12, color: Colors.grey[400])),
-          ],
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(Icons.person, size: 14, color: Colors.blue[300]),
-                const SizedBox(width: 4),
-                Text(data['reviewerName'] ?? 'TikTok User',
-                  style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.w600, fontSize: 13)),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text("${data['cuisine']} • ${data['address']}", style: TextStyle(color: Colors.grey[600])),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 4,
-              children: (data['recommendation_tags'] as List? ?? []).take(3).map((t) => Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(4)),
-                child: Text(t, style: const TextStyle(fontSize: 10, color: Colors.blue)),
-              )).toList(),
-            ),
-          ],
-        ),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-        onTap: () => _showDetails(context, data),
-      ),
-    );
-  }
-
-Widget _buildTinyDropdown(String label, String type, List<String> options) {
-    String? currentValue = type == 'city' ? filters.city : filters.cuisine;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      height: 35, // גובה נמוך יותר
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey[300]!),
-        borderRadius: BorderRadius.circular(8),
-        color: Colors.white,
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String?>(
-          value: currentValue,
-          hint: Text(label, style: const TextStyle(fontSize: 12)),
-          items: [null, ...options].map((v) => DropdownMenuItem(value: v, child: Text(v ?? 'All', style: const TextStyle(fontSize: 12)))).toList(),
-          onChanged: (val) => _updateFilter(type, val),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          const Text("No restaurants match your filters", style: TextStyle(color: Colors.grey, fontSize: 16)),
-        ],
+        title: Text(data['name'] ?? 'Restaurant', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+        subtitle: Text("${data['cuisine']} • ${data['address']}", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey),
+        onTap: () => showDetails(context, data),
       ),
     );
   }
 }
 
+// --- UTILITY SCREENS ---
+
+/// A full-screen map interface displaying markers for each saved restaurant.
 class MapScreen extends StatelessWidget {
   final FilterCriteria filteredFilters;
   const MapScreen({super.key, required this.filteredFilters});
@@ -346,27 +345,14 @@ class MapScreen extends StatelessWidget {
             .snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-          var filteredDocs = snapshot.data!.docs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-
-            bool matchCity = filteredFilters.city == null || (data['address'] ?? '').toString().toLowerCase().contains(filteredFilters.city!.toLowerCase());
-            bool matchCuisine = filteredFilters.cuisine == null || (data['cuisine'] ?? '').toString().toLowerCase() == filteredFilters.cuisine!.toLowerCase();
-            bool matchReviewer = filteredFilters.reviewer == null || data['reviewerName'] == filteredFilters.reviewer;
-
-            List resTags = (data['recommendation_tags'] as List? ?? []).map((t) => t.toString().toLowerCase()).toList();
-            bool matchTags = filteredFilters.selectedTags.every((tag) => resTags.contains(tag.toLowerCase()));
-
-            return matchCity && matchCuisine && matchTags && matchReviewer;
-          }).toList();
-
-          Set<Marker> markers = filteredDocs.map((doc) {
+          // Transform restaurant documents into Google Maps markers.
+          Set<Marker> markers = snapshot.data!.docs.map((doc) {
             final data = doc.data() as Map<String, dynamic>;
             final loc = data['location'] as Map<String, dynamic>;
             return Marker(
               markerId: MarkerId(doc.id),
               position: LatLng(loc['lat'], loc['lng']),
-              onTap: () => _showDetails(context, data),
+              onTap: () => showDetails(context, data),
             );
           }).toSet();
 
@@ -380,141 +366,7 @@ class MapScreen extends StatelessWidget {
   }
 }
 
-// שאר פונקציות העזר (showDetails, AddLinkScreen וכו') נשארות כפי שהיו
-void _showDetails(BuildContext context, Map<String, dynamic> data) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-    builder: (context) {
-      final String websiteUrl = data['website'] ?? '';
-      final String priceLevel = data['price_level'] ?? 'not-known';
-      final String sentimentScore = data['sentiment_score'] ?? 'neutral';
-
-      Color getPriceColor() {
-        switch (priceLevel) {
-          case 'cheap': return Colors.green;
-          case 'normal': return Colors.blue;
-          case 'expensive': return Colors.red;
-          default: return Colors.orange;
-        }
-      }
-
-      Color getSentimentColor() {
-        switch (sentimentScore) {
-          case 'positive': return Colors.green;
-          case 'negative': return Colors.red;
-          default: return Colors.orange;
-        }
-      }
-
-      return SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: InkWell(
-                      onTap: websiteUrl.isNotEmpty ? () => launchUrl(Uri.parse(websiteUrl)) : null,
-                      child: Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              data['name'] ?? 'Restaurant',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                decoration: websiteUrl.isNotEmpty ? TextDecoration.underline : null,
-                                color: websiteUrl.isNotEmpty ? Colors.blue.shade900 : Colors.black,
-                              ),
-                            ),
-                          ),
-                          if (websiteUrl.isNotEmpty)
-                            const Padding(padding: EdgeInsets.only(left: 4), child: Icon(Icons.open_in_new, size: 16, color: Colors.blue)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: getPriceColor().withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: getPriceColor())),
-                    child: Text(priceLevel == 'not-known' ? "? Price" : priceLevel.toUpperCase(), style: TextStyle(color: getPriceColor(), fontWeight: FontWeight.bold, fontSize: 11)),
-                  ),
-                ],
-              ),
-              if (data['reviewerName'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.person, size: 14, color: Colors.blue[300]),
-                      const SizedBox(width: 4),
-                      Text("Review by: ${data['reviewerName']}", style: TextStyle(fontSize: 13, color: Colors.blue[700], fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              const SizedBox(height: 12),
-              if (data['recommendation_essence'] != null)
-                Text(data['recommendation_essence'], style: TextStyle(fontSize: 15, color: Colors.grey.shade800, height: 1.4)),
-              const SizedBox(height: 16),
-              if (data['community_sentiment'] != null && data['community_sentiment'].toString().isNotEmpty) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.blue.shade100)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(width: 8, height: 8, decoration: BoxDecoration(color: getSentimentColor(), shape: BoxShape.circle)),
-                          const SizedBox(width: 8),
-                          const Text("Community Voice", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blueGrey)),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(data['community_sentiment'], style: TextStyle(color: Colors.blue.shade900, fontSize: 13, height: 1.4)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-              const Divider(),
-              const SizedBox(height: 8),
-              _buildActionButton(Icons.directions, 'Get Directions', Colors.blue, () async {
-                 final loc = data['location'];
-                 final url = "http://maps.google.com/?q=${loc['lat']},${loc['lng']}";
-                 await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-              }),
-              _buildActionButton(Icons.play_circle_fill, 'Watch TikTok Review', Colors.black, () => launchUrl(Uri.parse(data['videoUrl'] ?? ''))),
-            ],
-          ),
-        ),
-      );
-    },
-  );
-}
-
-Widget _buildActionButton(IconData icon, String label, Color color, VoidCallback onTap) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: onTap,
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-        style: OutlinedButton.styleFrom(foregroundColor: color, side: BorderSide(color: color.withOpacity(0.5))),
-      ),
-    ),
-  );
-}
-
+/// A screen for inputting new social media links for AI analysis.
 class AddLinkScreen extends StatefulWidget {
   const AddLinkScreen({super.key});
   @override
@@ -525,19 +377,20 @@ class _AddLinkScreenState extends State<AddLinkScreen> {
   final TextEditingController _controller = TextEditingController();
   bool _isSending = false;
 
+  /// Adds a new URL record to Firestore, triggering the backend Cloud Function.
   void _submit() async {
-    if (_controller.text.isEmpty) return;
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
+    final url = _controller.text.trim();
+    if (url.isEmpty) return;
     setState(() => _isSending = true);
+
     await FirebaseFirestore.instance.collection('tiktok_links').add({
-      'url': _controller.text.trim(),
+      'url': url,
       'status': 'pending',
-      'userId': uid,
+      'userId': FirebaseAuth.instance.currentUser?.uid,
       'createdAt': FieldValue.serverTimestamp(),
     });
-    Navigator.pop(context);
+
+    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -548,7 +401,7 @@ class _AddLinkScreenState extends State<AddLinkScreen> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            TextField(controller: _controller, decoration: const InputDecoration(hintText: 'Paste TikTok link here')),
+            TextField(controller: _controller, decoration: const InputDecoration(hintText: 'Paste video link here')),
             const SizedBox(height: 20),
             _isSending ? const CircularProgressIndicator() : ElevatedButton(onPressed: _submit, child: const Text('Submit')),
           ],
