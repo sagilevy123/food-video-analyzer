@@ -9,8 +9,9 @@ import 'package:my_food_app/services/url_service.dart';
 
 /// Displays the animated details dialog with a swipeable PageView for multiple reviews.
 void showDetails(BuildContext context, Map<String, dynamic> data) {
+  // תיקון: אם יש המלצות, נשתמש בהן. אם אין (הוספה ידנית), נשאיר רשימה ריקה
+  // ולא נכניס את [data] כברירת מחדל כפי שהיה קודם
   List<dynamic> recommendations = data['recommendations'] ?? [];
-  if (recommendations.isEmpty) recommendations = [data];
 
   final String docId = data['docId'] ?? '';
   int localRating = data['user_rating'] ?? 0;
@@ -23,7 +24,6 @@ void showDetails(BuildContext context, Map<String, dynamic> data) {
     transitionDuration: const Duration(milliseconds: 400),
     pageBuilder: (context, anim1, anim2) => const SizedBox(),
     transitionBuilder: (context, anim1, anim2, child) {
-      // Sophisticated scale and fade entry animation.
       return Transform.scale(
         scale: Curves.easeInOutBack.transform(anim1.value),
         child: FadeTransition(
@@ -42,7 +42,7 @@ void showEditNameDialog(BuildContext context, Map<String, dynamic> data, String 
   showDialog(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text("ערוך שם מסעדה"),
+      title: const Text("Edit restaurant's name"),
       content: TextField(controller: nameEditController, autofocus: true),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text("ביטול")),
@@ -67,14 +67,12 @@ void showEditNameDialog(BuildContext context, Map<String, dynamic> data, String 
 
 /// Constructs the main structure for the restaurant details PageView.
 Widget buildDetailsContent(BuildContext context, Map<String, dynamic> data, List<dynamic> recommendations, String docId, int localRating, TextEditingController notesController) {
+  final int pageCount = 1 + recommendations.length;
+  // יצירת ה-Controller מחוץ ל-Builder כדי לשמור על הייחוס שלו
   final PageController pageController = PageController(viewportFraction: 0.96);
 
   return StatefulBuilder(
     builder: (context, setModalState) {
-      if (!pageController.hasListeners) {
-        pageController.addListener(() => setModalState(() {}));
-      }
-
       return Center(
         child: SizedBox(
           height: MediaQuery.of(context).size.height * 0.82,
@@ -83,10 +81,14 @@ Widget buildDetailsContent(BuildContext context, Map<String, dynamic> data, List
             children: [
               Expanded(
                 child: PageView.builder(
+                  physics: pageCount <= 1 ? const NeverScrollableScrollPhysics() : const BouncingScrollPhysics(),
                   controller: pageController,
-                  itemCount: recommendations.length + 1,
+                  itemCount: pageCount,
+                  // הוספת ה-onPageChanged כדי לעדכן את הנקודות בזמן אמת
+                  onPageChanged: (index) {
+                    setModalState(() {});
+                  },
                   itemBuilder: (context, index) {
-                    // Index 0 is the AI summary page; subsequent indices are individual video reviews.
                     if (index == 0) {
                       return buildMainSummaryPage(context, data, localRating, notesController, setModalState, docId);
                     }
@@ -95,9 +97,11 @@ Widget buildDetailsContent(BuildContext context, Map<String, dynamic> data, List
                   },
                 ),
               ),
-              const SizedBox(height: 12),
-              // Visual page indicator (dots).
-              buildDotsIndicator(recommendations.length + 1, pageController),
+              if (pageCount > 1) ...[
+                const SizedBox(height: 12),
+                // פונקציית הנקודות תקבל את ה-State המעודכן בזכות ה-setModalState לעיל
+                buildDotsIndicator(pageCount, pageController),
+              ],
               const SizedBox(height: 10),
             ],
           ),
@@ -176,6 +180,35 @@ Widget buildMainSummaryPage(BuildContext context, Map<String, dynamic> data, int
 
             const SizedBox(height: 12),
             Text(data['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+
+            if (data['website'] != null && data['website'].toString().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () async {
+                  final Uri url = Uri.parse(data['website']);
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  }
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.language, size: 16, color: Colors.blue[700]),
+                    const SizedBox(width: 6),
+                    Text(
+                      "Official Website",
+                      style: TextStyle(
+                        color: Colors.blue[700],
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
             const Divider(height: 40, thickness: 0.5),
 
             const Text("My Rating & Notes", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
@@ -352,7 +385,27 @@ Widget buildReviewerCardContent(BuildContext context, Map<String, dynamic> data,
                             borderRadius: BorderRadius.circular(15),
                             border: Border.all(color: Colors.blue[100]!),
                           ),
-                          child: Text(community, style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4)),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  // נקודת סנטימנט צבעונית
+                                  buildSentimentDot(rec['sentiment_score']),
+                                  const SizedBox(width: 6),
+                                  const Icon(Icons.forum_outlined, size: 14, color: Colors.blueGrey),
+                                  const SizedBox(width: 4),
+                                  const Text("Community Voice",
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                community,
+                                style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4)
+                              ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 16),
                       ],

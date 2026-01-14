@@ -2,25 +2,32 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'google_auth_screen.dart';
-import 'package:intl/intl.dart';
 import 'package:my_food_app/models/FilterCriteria.dart';
-import 'package:my_food_app/widgets/ui_components.dart';
 import 'package:my_food_app/widgets/details_logic.dart';
-import 'package:my_food_app/services/url_service.dart';
+import 'package:my_food_app/screens/add_link_screen.dart';
+import 'dart:async';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-/// The entry point of the Flutter application.
-/// It ensures all bindings are initialized and Firebase is ready before launching.
+import 'dart:developer' as dev; // ייבוא כלי הלוגים של דארט
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+
+  // 1. אתחול Firebase עם הגנה
+  try {
+    await Firebase.initializeApp().timeout(const Duration(seconds: 3));
+  } catch (_) {}
+
+  // 2. הפעלת האפליקציה מיד! (זה ימנע את המסך הלבן)
   runApp(const FoodApp());
+
 }
 
-/// The root widget of the Foodie Map application.
-/// Sets the global visual theme and determines the initial screen based on authentication state.
 class FoodApp extends StatelessWidget {
   const FoodApp({super.key});
 
@@ -29,14 +36,12 @@ class FoodApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
-      // StreamBuilder listens to the user's authentication status in real-time.
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          // If the user is logged in, show the HomeScreen, otherwise show the Auth screen.
           if (snapshot.hasData) {
             return const HomeScreen();
           }
@@ -47,22 +52,92 @@ class FoodApp extends StatelessWidget {
   }
 }
 
-
-// --- MAIN SCREENS ---
-
-/// The central hub of the app, containing the searchable list of restaurants and filter options.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  // משתנה לניהול המאזין לשיתוף
+  late StreamSubscription _intentDataStreamSubscription;
   FilterCriteria filters = FilterCriteria();
   String searchQuery = "";
   final TextEditingController _searchController = TextEditingController();
 
-  /// Adds or removes a tag from the active filter list.
+  @override
+  void initState() {
+    super.initState();
+    // רישום ה-Observer כדי לזהות חזרה לאפליקציה מרקע
+    WidgetsBinding.instance.addObserver(this);
+
+    // 1. האזנה לשיתוף כשהאפליקציה פתוחה ברקע (Stream)
+    _intentDataStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen((value) {
+      if (value.isNotEmpty) {
+        _handleSharedLink(value.first.path);
+      }
+    }, onError: (err) {
+      print("Sharing error: $err");
+    });
+
+    // 2. בדיקה בזמן פתיחת האפליקציה מאפס (Initial)
+    ReceiveSharingIntent.instance.getInitialMedia().then((value) {
+      if (value != null && value.isNotEmpty) {
+        _handleSharedLink(value.first.path);
+      }
+    });
+  }
+
+  // פונקציית התיקון הקריטית ל-iOS
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // בכל פעם שחוזרים מטיקטוק לאפליקציה (Resumed)
+    if (state == AppLifecycleState.resumed) {
+      ReceiveSharingIntent.instance.getInitialMedia().then((value) {
+        if (value.isNotEmpty) {
+          _handleSharedLink(value.first.path);
+          // ניקוי כדי למנוע כפילויות בפתיחה הבאה
+          ReceiveSharingIntent.instance.reset();
+        }
+      });
+    }
+  }
+
+  void _handleSharedLink(String rawText) async {
+  RegExp regExp = RegExp(r'(https?:\/\/[^\s]+)');
+  var match = regExp.firstMatch(rawText);
+
+  if (match != null) {
+    String url = match.group(0)!;
+
+    // הצגת הודעה מידית למשתמש
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("מזהה סרטון טיקטוק..."), backgroundColor: Colors.blue),
+    );
+
+    try {
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+
+      // שמירה באוסף שמפעיל את ה-index.ts
+      await FirebaseFirestore.instance.collection('tiktok_links').add({
+        'url': url,
+        'userId': userId,
+        'status': 'pending', // זה מה שמפעיל את ה-AI בשרת!
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // הודעת הצלחה - בדיוק כמו ב-AddLinkScreen
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("נשלח לניתוח! המסעדה תופיע ברשימה בקרוב 🎉"), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      print("Firebase Error: $e");
+    }
+  }
+}
+
   void _toggleTag(String tag) {
     setState(() {
       if (filters.selectedTags.contains(tag)) {
@@ -73,13 +148,13 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Displays a selection dialog for predefined filtering categories (City/Cuisine).
   void _showFilterDialog(String type, List<String> options) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text("Select ${type == 'city' ? 'City' : 'Cuisine'}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        title: Text("Select ${type == 'city' ? 'City' : 'Cuisine'}",
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -105,7 +180,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    // ניקוי כל המאזינים כדי למנוע דליפות זיכרון
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
+    _intentDataStreamSubscription.cancel();
     super.dispose();
   }
 
@@ -116,7 +194,6 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // HEADER: App branding and "Add Link" navigation
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Column(
@@ -124,26 +201,38 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Expanded Column handles the title and tagline without horizontal overflow.
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text("Foodie Map",
+                            const Text("Foodie Map",
                                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -1)),
-                            Text("Organizing your favorites has never been so easy",
+                            const Text("Organizing your favorites has never been so easy",
                                  style: TextStyle(fontSize: 14, color: Colors.grey, fontWeight: FontWeight.w400)),
                           ],
                         ),
                       ),
                       IconButton(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddLinkScreen())),
-                        icon: const Icon(Icons.add_circle, color: Colors.blue, size: 32),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => MapScreen(filteredFilters: filters))
+                        ),
+                        icon: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.location_on_rounded,
+                            color: Colors.blue,
+                            size: 24,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 20),
-                  // SEARCH BAR: Triggers real-time filtering of the displayed list.
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
@@ -160,7 +249,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
-            // FILTERS: Horizontal scrollable chips for city, cuisine, and tags.
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -202,7 +290,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const Divider(height: 1, color: Color(0xFFF5F5F5)),
-            // LIST VIEW: Fetches user-specific restaurant data from Cloud Firestore.
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
@@ -214,27 +301,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   var allDocs = snapshot.data!.docs;
 
-                  // Manual client-side filtering based on search query.
                   var filteredDocs = allDocs.where((doc) {
                     final data = doc.data() as Map<String, dynamic>;
-                    return searchQuery.isEmpty ||
-                           (data['name'] ?? '').toString().toLowerCase().contains(searchQuery);
+                    bool matchesSearch = searchQuery.isEmpty ||
+                        (data['name'] ?? '').toString().toLowerCase().contains(searchQuery);
+                    bool matchesCity = filters.city == null || data['address'].toString().contains(filters.city!);
+                    bool matchesCuisine = filters.cuisine == null || data['cuisine'] == filters.cuisine;
+                    bool matchesTags = filters.selectedTags.isEmpty ||
+                        filters.selectedTags.any((tag) =>
+                            (data['global_summary']?['decision_chips'] as List?)?.contains(tag) ?? false);
+
+                    return matchesSearch && matchesCity && matchesCuisine && matchesTags;
                   }).toList();
 
-                  // Prevents duplicate entries from appearing in the UI list.
                   final seenNames = <String>{};
                   final List<QueryDocumentSnapshot> uniqueDocs = filteredDocs.where((doc) {
                     final data = doc.data() as Map<String, dynamic>;
                     final String name = (data['name'] ?? '').toString().toLowerCase().trim();
-                    if (seenNames.contains(name)) {
-                      return false;
-                    } else {
-                      seenNames.add(name);
-                      return true;
-                    }
+                    if (seenNames.contains(name)) return false;
+                    seenNames.add(name);
+                    return true;
                   }).toList();
 
-                  if (uniqueDocs.isEmpty) return const Center(child: Text("No restaurants found"));
+                  if (uniqueDocs.isEmpty) return const Center(child: Text("No restaurants found matching filters"));
 
                   return ListView.builder(
                     padding: const EdgeInsets.all(20),
@@ -244,15 +333,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       final data = doc.data() as Map<String, dynamic>;
                       data['docId'] = doc.id;
 
-                      // Dismissible allows users to delete an entry with a swipe.
                       return Dismissible(
                         key: Key(doc.id),
                         direction: DismissDirection.endToStart,
                         onDismissed: (direction) {
                           FirebaseFirestore.instance.collection('restaurants').doc(doc.id).delete();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text("${data['name']} removed from your list")),
-                          );
                         },
                         background: Container(
                           alignment: Alignment.centerRight,
@@ -275,15 +360,18 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MapScreen(filteredFilters: filters))),
-        label: const Text("Map"),
-        icon: const Icon(Icons.map),
-        backgroundColor: Colors.black,
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const AddLinkScreen())
+        ),
+        label: const Text("Add New"),
+        icon: const Icon(Icons.add),
+        backgroundColor: Colors.blue,
+        elevation: 4,
       ),
     );
   }
 
-  /// Builder for specialized filter category buttons.
   Widget _buildModernFilterButton({required IconData icon, required String label, required VoidCallback onTap, required bool isActive}) {
     return GestureDetector(
       onTap: onTap,
@@ -307,7 +395,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Builder for individual restaurant summary cards.
   Widget _buildModernCard(BuildContext context, Map<String, dynamic> data) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -327,9 +414,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// --- UTILITY SCREENS ---
-
-/// A full-screen map interface displaying markers for each saved restaurant.
 class MapScreen extends StatelessWidget {
   final FilterCriteria filteredFilters;
   const MapScreen({super.key, required this.filteredFilters});
@@ -345,7 +429,6 @@ class MapScreen extends StatelessWidget {
             .snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          // Transform restaurant documents into Google Maps markers.
           Set<Marker> markers = snapshot.data!.docs.map((doc) {
             final data = doc.data() as Map<String, dynamic>;
             final loc = data['location'] as Map<String, dynamic>;
@@ -366,47 +449,17 @@ class MapScreen extends StatelessWidget {
   }
 }
 
-/// A screen for inputting new social media links for AI analysis.
-class AddLinkScreen extends StatefulWidget {
-  const AddLinkScreen({super.key});
-  @override
-  State<AddLinkScreen> createState() => _AddLinkScreenState();
-}
+class LinkSharingService {
+  static const platform = MethodChannel('com.example.app/sharing');
 
-class _AddLinkScreenState extends State<AddLinkScreen> {
-  final TextEditingController _controller = TextEditingController();
-  bool _isSending = false;
-
-  /// Adds a new URL record to Firestore, triggering the backend Cloud Function.
-  void _submit() async {
-    final url = _controller.text.trim();
-    if (url.isEmpty) return;
-    setState(() => _isSending = true);
-
-    await FirebaseFirestore.instance.collection('tiktok_links').add({
-      'url': url,
-      'status': 'pending',
-      'userId': FirebaseAuth.instance.currentUser?.uid,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Add Recommendation')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          children: [
-            TextField(controller: _controller, decoration: const InputDecoration(hintText: 'Paste video link here')),
-            const SizedBox(height: 20),
-            _isSending ? const CircularProgressIndicator() : ElevatedButton(onPressed: _submit, child: const Text('Submit')),
-          ],
-        ),
-      ),
-    );
+  static Future<String?> getSharedLink() async {
+    try {
+      // אנחנו מבקשים מה-iOS את הערך ששמרנו תחת המפתח last_shared_link
+      final String? sharedLink = await platform.invokeMethod('getSharedLink');
+      return sharedLink;
+    } on PlatformException catch (e) {
+      print("Failed to get shared link: '${e.message}'.");
+      return null;
+    }
   }
 }

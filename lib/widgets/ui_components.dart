@@ -76,3 +76,31 @@ Widget buildDotsIndicator(int count, PageController controller) {
     }),
   );
 }
+
+Widget buildSentimentDot(dynamic sentiment) {
+  Color dotColor;
+  switch (sentiment?.toString().toLowerCase()) {
+    case 'positive':
+      dotColor = Colors.green;
+      break;
+    case 'negative':
+      dotColor = Colors.red;
+      break;
+    case 'neutral':
+    default:
+      dotColor = Colors.orange;
+      break;
+  }
+
+  return Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(
+      color: dotColor,
+      shape: BoxShape.circle,
+      boxShadow: [
+        BoxShadow(color: dotColor.withOpacity(0.4), blurRadius: 4, spreadRadius: 1)
+      ],
+    ),
+  );
+}

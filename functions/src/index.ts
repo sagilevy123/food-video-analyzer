@@ -9,7 +9,6 @@ admin.initializeApp();
 
 const IG_HOST = "social-media-video-downloader.p.rapidapi.com";
 
-// פונקציית עזר לחילוץ הלינק לתמונה מתוך ה-JSON של טיקטוק
 async function fetchThumbnailUrl(videoUrl: string): Promise<string> {
     try {
         if (videoUrl.includes('tiktok.com')) {
@@ -25,6 +24,72 @@ async function fetchThumbnailUrl(videoUrl: string): Promise<string> {
     return "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800";
 }
 
+/**
+ * פונקציית עזר לשליפת אתר רשמי מגוגל לפי Place ID
+ */
+async function fetchOfficialWebsite(placeId: string, apiKey: string): Promise<string> {
+    try {
+        const res = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json`, {
+            params: { place_id: placeId, fields: "website", key: apiKey }
+        });
+        return res.data.result?.website || "";
+    } catch (e) {
+        return "";
+    }
+}
+
+export const onManualRestaurantAdded = functions.runWith({
+    timeoutSeconds: 60,
+    memory: '256MB',
+    secrets: ["MAPS_API_KEY"]
+}).firestore.document("manual_restaurants/{docId}").onCreate(async (snapshot, context) => {
+    const data = snapshot.data();
+    if (!data) return null;
+
+    const MAPS_KEY = process.env.MAPS_API_KEY || "";
+    const restaurantsRef = admin.firestore().collection("restaurants");
+    const searchQuery = `${data.name}, ${data.manualAddress || ""}, ${data.city}, Israel`;
+
+    try {
+        const geoRes = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
+            params: { address: searchQuery, key: MAPS_KEY }
+        });
+
+        const result = geoRes.data.results[0];
+        const finalAddr = result?.formatted_address || `${data.name}, ${data.city}`;
+        const loc = result?.geometry.location || { lat: 32.0853, lng: 34.7818 };
+
+        let website = "";
+        if (result?.place_id) {
+            website = await fetchOfficialWebsite(result.place_id, MAPS_KEY);
+        }
+
+        await restaurantsRef.add({
+            name: data.name,
+            address: finalAddr,
+            location: loc,
+            website: website,
+            cuisine: data.cuisine,
+            userId: data.userId,
+            price_level: data.price_level,
+            user_notes: data.user_notes,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            videoUrls: [],
+            recommendations: [],
+            global_summary: {
+                price_level: data.price_level,
+                unified_description: data.user_notes || "Manually added restaurant",
+                decision_chips: [data.cuisine, data.city]
+            },
+            user_rating: 0
+        });
+
+        return snapshot.ref.delete();
+    } catch (error: any) {
+        return snapshot.ref.update({ status: "error", message: error.message });
+    }
+});
+
 export const onTikTokLinkAdded = functions.runWith({
     timeoutSeconds: 540,
     memory: '1GB',
@@ -36,37 +101,25 @@ export const onTikTokLinkAdded = functions.runWith({
     const tempFilePath = path.join(os.tmpdir(), `video_${context.params.docId}.mp4`);
 
     const GEMINI_KEY = process.env.GEMINI_API_KEY;
-    const MAPS_KEY = process.env.MAPS_API_KEY;
+    const MAPS_KEY = process.env.MAPS_API_KEY || "";
     const RAPID_KEY = process.env.RAPID_API_KEY;
 
     try {
-        console.log(`[START] Processing URL: ${rawUrl}`);
         const restaurantsRef = admin.firestore().collection("restaurants");
-
-        // --- שלב הגנה מוקדם: האם הלינק כבר קיים אצל המשתמש באחת המסעדות? ---
-        const existingLinkQuery = await restaurantsRef
-            .where('userId', '==', userId)
-            .where('videoUrls', 'array-contains', rawUrl)
-            .get();
-
-        if (!existingLinkQuery.empty) {
-            console.log(`[SKIP] Video URL ${rawUrl} already processed for this user.`);
-            return snapshot.ref.update({ status: "completed", message: "Link already exists" });
-        }
+        const existingLink = await restaurantsRef.where('userId', '==', userId).where('videoUrls', 'array-contains', rawUrl).get();
+        if (!existingLink.empty) return snapshot.ref.update({ status: "completed" });
 
         let directVideoUrl = "";
         let videoDescription = "No caption found";
         let authorName = "Social Creator";
         let commentsText = "No comments available";
 
-        // --- שלב 1: חילוץ נתונים (TikTok/Instagram) ---
         let source = "tiktok";
         if (rawUrl.includes("instagram.com")) {
             source = "instagram";
             const urlParts = rawUrl.split("/");
-            const reelIndex = urlParts.findIndex((part: string) => part === "reel" || part === "p" || part === "reels");
-            const shortcode = reelIndex !== -1 ? urlParts[reelIndex + 1] : "";
-
+            const reelIndex = urlParts.findIndex((p: string) => p === "reel" || p === "p" || p === "reels");
+            const shortcode = urlParts[reelIndex + 1];
             const videoRes = await axios.get(`https://${IG_HOST}/instagram/v3/media/post/details`, {
                 params: { shortcode: shortcode, renderableFormats: 'all' },
                 headers: { "x-rapidapi-key": RAPID_KEY || "", "x-rapidapi-host": IG_HOST }
@@ -100,7 +153,6 @@ export const onTikTokLinkAdded = functions.runWith({
             } catch (e) { console.warn("TT comments failed"); }
         }
 
-        // --- שלב 2: הורדה ---
         const videoResponse = await axios({ url: directVideoUrl, method: 'get', responseType: 'stream' });
         const writer = fs.createWriteStream(tempFilePath);
         videoResponse.data.pipe(writer);
@@ -109,7 +161,6 @@ export const onTikTokLinkAdded = functions.runWith({
             writer.on('error', (err) => reject(err));
         });
 
-        // --- שלב 3: Gemini (הפרומפט המקורי) ---
         const videoBase64 = fs.readFileSync(tempFilePath).toString("base64");
         const payload = {
             contents: [{
@@ -153,27 +204,31 @@ export const onTikTokLinkAdded = functions.runWith({
         const gRes = await axios.post(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, payload);
         const aiData = JSON.parse(gRes.data.candidates[0].content.parts[0].text.match(/\{[\s\S]*\}/)[0]);
 
-        // --- שלב 4: Geocoding ---
         const rName = aiData.name || "Unknown";
         const geo = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(rName + " " + aiData.address)}&key=${MAPS_KEY}`);
-        const finalAddr = geo.data.results[0]?.formatted_address || aiData.address;
-        const loc = geo.data.results[0]?.geometry.location || { lat: 32.0853, lng: 34.7818 };
+        const result = geo.data.results[0];
+        const finalAddr = result?.formatted_address || aiData.address;
+        const loc = result?.geometry.location || { lat: 32.0853, lng: 34.7818 };
 
-        // --- שלב 5: הכנת אובייקט וה-Thumbnail ---
+        let website = "";
+        if (result?.place_id) {
+            website = await fetchOfficialWebsite(result.place_id, MAPS_KEY);
+        }
+
         const realThumbnail = await fetchThumbnailUrl(rawUrl);
         const newRec = {
             videoUrl: rawUrl,
-            source: source,
+            source,
             reviewerName: authorName,
             thumbnailUrl: realThumbnail,
             top_highlights: aiData.top_highlights || [],
             full_description: aiData.full_description || "",
             community_sentiment: aiData.community_sentiment || "",
             price_level: aiData.price_level || 0,
-            addedAt: Date.now()
+            addedAt: Date.now(),
+            sentiment_score: aiData.sentiment_score || "neutral"
         };
 
-        // --- חיפוש חכם למניעת כפילויות ---
         let nameQuery = await restaurantsRef.where('userId', '==', userId).where('name', '==', rName).get();
         let docToUpdate = !nameQuery.empty ? nameQuery.docs[0] : null;
 
@@ -183,10 +238,8 @@ export const onTikTokLinkAdded = functions.runWith({
         }
 
         if (docToUpdate) {
-            // --- שלב 6: איחוד (הפרומפט המקורי) ---
             const targetDoc = docToUpdate;
             const existingData = targetDoc.data();
-
             const allRecs = [...(existingData.recommendations || []), newRec];
 
             const summaryPayload = {
@@ -222,14 +275,14 @@ export const onTikTokLinkAdded = functions.runWith({
                 updatedAt: admin.firestore.FieldValue.serverTimestamp()
             });
         } else {
-            // יצירת מסעדה חדשה
             await restaurantsRef.add({
                 ...aiData,
                 name: rName,
-                thumbnailUrl: realThumbnail,
                 address: finalAddr,
                 location: loc,
-                userId: userId,
+                website,
+                userId,
+                thumbnailUrl: realThumbnail,
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 videoUrls: [rawUrl],
                 recommendations: [newRec],
@@ -245,10 +298,8 @@ export const onTikTokLinkAdded = functions.runWith({
 
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return snapshot.ref.update({ status: "completed" });
-
     } catch (error: any) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-        console.error("ERROR:", error.message);
         return snapshot.ref.update({ status: "error", message: error.message });
     }
 });
